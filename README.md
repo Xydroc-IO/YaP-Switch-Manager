@@ -10,7 +10,9 @@ A modern, cross-platform desktop application to manage your network switch via i
 
 ## Features
 
-- **Embedded Console**: Open the switch web console in an embedded window within the application
+- **Multiple Switch Management**: Save and manage multiple switches with custom names
+- **Embedded Console**: Open multiple switch web consoles in separate embedded windows simultaneously
+- **Switch Persistence**: Save switch configurations (name + URL) for easy recall
 - **External Browser**: Option to open the console in your default web browser
 - **Connection Testing**: Test connectivity to the switch with detailed status feedback
 - **Configurable Switch URL**: Easily change the switch IP address through the GUI
@@ -125,52 +127,151 @@ python3 core/switch_manager.py
 
 ### Application Features
 
-1. **Configure Switch URL**:
-   - Enter the switch IP address in the "Switch URL" field
-   - Click "Update" or press Enter to save
-   - The URL is validated and normalized automatically
+1. **Save Switches**:
+   - Enter a switch name and URL in the "Add/Edit Switch" section
+   - Click "Save Switch" or press Enter to save the configuration
+   - Saved switches are stored persistently and can be recalled later
+   - Switch configurations are saved to `~/.config/yap-switch-manager/switches.json` (Linux/Mac) or `%APPDATA%\YaP-Switch-Manager\switches.json` (Windows)
 
-2. **Open Switch Console (Embedded)**:
-   - Opens the switch web console in an embedded window
+2. **Load Saved Switches**:
+   - All saved switches appear in the "Saved Switches" listbox
+   - Click on a switch in the list to select it
+   - Click "Load" to load the switch's configuration into the form fields
+   - The switch name and URL will be populated automatically
+
+3. **Delete Switches**:
+   - Select a switch from the "Saved Switches" list
+   - Click "Delete" to remove it from your saved switches
+   - You'll be prompted to confirm before deletion
+
+4. **Open Multiple Switch Consoles**:
+   - You can open multiple switch console windows simultaneously
+   - Each console window shows the switch name in its title bar
+   - Configure different switches and click "Open Console (Embedded)" multiple times
+   - Each switch console runs in its own separate process for stability
+
+5. **Open Switch Console (Embedded)**:
+   - Opens the currently configured switch's web console in an embedded window
+   - Uses the name and URL from the form fields
    - Runs in a separate process for stability
    - Automatically falls back to external browser if webview fails
 
-3. **Open in External Browser**:
-   - Opens the switch console in your default web browser
+6. **Open in External Browser**:
+   - Opens the currently configured switch console in your default web browser
    - Useful if the embedded console has issues
+   - Uses the switch URL from the form fields
 
-4. **Test Connection**:
-   - Tests connectivity to the switch
+7. **Test Connection**:
+   - Tests connectivity to the currently configured switch
    - Shows detailed connection status in a popup dialog
    - Helps diagnose network issues
+   - Uses the switch URL from the form fields
 
-5. **System Tray (Linux)**:
+8. **System Tray (Linux)**:
    - Clicking the X button minimizes to system tray
    - Right-click tray icon to show window or quit
    - Keeps the application running in the background
 
 ## Configuration
 
-### Changing the Switch URL
+### Managing Switches
 
-The switch URL can be changed directly in the application:
+Switches are managed through the GUI interface:
 
-1. Enter the new IP address in the "Switch URL" field (e.g., `192.168.1.1` or `http://192.168.1.1`)
-2. Click "Update" or press Enter
-3. The URL is automatically validated and normalized
+1. **Adding a New Switch**:
+   - Enter a name for the switch (e.g., "Main Switch", "Office Switch")
+   - Enter the switch URL (e.g., `192.168.1.1` or `http://192.168.1.1`)
+   - Click "Save Switch" or press Enter
+   - The switch will appear in the "Saved Switches" list
 
-The application supports:
+2. **Loading a Saved Switch**:
+   - Click on a switch in the "Saved Switches" list to select it
+   - Click "Load" to populate the form fields with that switch's configuration
+   - The switch name and URL will be loaded into the "Add/Edit Switch" section
+
+3. **Editing a Switch**:
+   - Load the switch you want to edit
+   - Modify the name or URL in the form fields
+   - Click "Save Switch" to update the configuration
+
+4. **Deleting a Switch**:
+   - Select the switch from the "Saved Switches" list
+   - Click "Delete"
+   - Confirm the deletion in the popup dialog
+
+### Switch Storage
+
+Switch configurations are stored persistently in a JSON file:
+- **Linux/Mac**: `~/.config/yap-switch-manager/switches.json`
+- **Windows**: `%APPDATA%\YaP-Switch-Manager\switches.json`
+
+Each switch configuration contains:
+- **name**: Display name for the switch
+- **url**: Full URL to the switch's web console
+
+The storage file is created automatically when you save your first switch. You can manually edit this file if needed, but the GUI is the recommended way to manage switches.
+
+### URL Format
+
+The application supports flexible URL formats:
 - IP addresses without protocol (automatically adds `http://`)
 - Full URLs with `http://` or `https://`
 - Automatic trailing slash normalization
 
+**Examples:**
+- `192.168.1.1` → `http://192.168.1.1/`
+- `192.168.1.1/` → `http://192.168.1.1/`
+- `http://192.168.1.1` → `http://192.168.1.1/`
+- `https://switch.example.com` → `https://switch.example.com/`
+
 ### Default Configuration
 
-By default, the switch URL is set to `http://192.168.2.1/`. This can be changed in the GUI or by editing `core/switch_manager.py`:
+By default, when you first run the application, the URL field is pre-filled with `http://192.168.2.1/`. You can change this by:
+- Entering a different URL in the form and saving it as a switch
+- The default URL is just a starting point and can be modified at any time
 
-```python
-self.switch_url = "http://192.168.2.1/"
+## Advanced Usage
+
+### Managing Multiple Switches
+
+YaP Switch Manager supports managing multiple switches simultaneously:
+
+1. **Save Multiple Switches**:
+   - Add each switch configuration with a unique name
+   - All saved switches appear in the "Saved Switches" list
+   - Switch names help you identify which switch is which
+
+2. **Open Multiple Consoles**:
+   - Load a switch configuration from the saved list
+   - Click "Open Console (Embedded)" to open its console
+   - Load a different switch and click "Open Console (Embedded)" again
+   - Each console opens in its own window with the switch name in the title
+   - You can manage multiple switches at the same time
+
+3. **Quick Switching**:
+   - Use the "Saved Switches" list to quickly load different switch configurations
+   - Click on a switch in the list to select it
+   - Click "Load" to populate the form fields
+   - Open its console without re-entering the URL
+
+### Switch Storage Format
+
+The switch storage file (`switches.json`) uses a simple JSON format:
+
+```json
+{
+  "Main Switch": {
+    "name": "Main Switch",
+    "url": "http://192.168.1.1/"
+  },
+  "Office Switch": {
+    "name": "Office Switch",
+    "url": "http://192.168.2.1/"
+  }
+}
 ```
+
+You can manually edit this file to add or modify switches, but the GUI is the recommended method.
 
 ## Troubleshooting
 
@@ -214,13 +315,32 @@ If the system tray icon doesn't appear:
 - Some desktop environments may require additional packages
 - Try restarting the application
 
+### Saved Switches Not Appearing
+
+If your saved switches don't appear in the list:
+
+- Check if the storage file exists: `~/.config/yap-switch-manager/switches.json` (Linux/Mac)
+- Ensure the file is valid JSON format
+- Try saving a new switch to create the storage file
+- Check file permissions on the config directory
+
+### Multiple Console Windows
+
+If you have issues with multiple console windows:
+
+- Each console runs in a separate process for stability
+- Console windows are independent and can be closed individually
+- The switch name appears in each console window's title bar
+- Closing a console window doesn't affect other open consoles
+
 ## Project Structure
 
 ```
 YaP-Switch-Manager/
 ├── core/
-│   ├── switch_manager.py      # Main application
-│   └── webview_launcher.py     # Webview subprocess launcher
+│   ├── switch_manager.py      # Main application and GUI
+│   ├── switch_storage.py      # Switch configuration storage system
+│   └── webview_launcher.py    # Webview subprocess launcher
 ├── installers/
 │   ├── install-dependencies.sh # Dependency installer
 │   └── install-desktop-entry.sh # Desktop entry installer
@@ -243,6 +363,8 @@ YaP-Switch-Manager/
 - **Pillow** (>=9.0.0): Image processing for icons
 - **pystray** (>=0.19.0): System tray support (Linux)
 
+Note: All packages are automatically installed when using the dependency installer script.
+
 ### System Packages (Linux)
 
 - Python 3.7+ with Tkinter
@@ -256,7 +378,14 @@ YaP-Switch-Manager/
 
 1. Clone or download the repository
 2. Install dependencies (see Installation section)
-3. Run: `python3 core/switch_manager.py`
+3. Run using the launcher script:
+   ```bash
+   ./launchers/start-switch-manager.sh
+   ```
+   Or run directly:
+   ```bash
+   python3 core/switch_manager.py
+   ```
 
 ### Building Standalone Executables
 
