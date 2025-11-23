@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=YaP Switch Manager
+Comment=Manage network switch via web console
+Exec=launchers/start-switch-manager.sh
+Path=@EXEC_DIR@
+Icon=@ICON_PATH@
+Terminal=false
+Categories=Network;System;Utility;
+Keywords=switch;network;management;console;
+StartupNotify=true
+
