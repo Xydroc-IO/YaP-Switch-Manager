@@ -84,11 +84,13 @@ class SwitchManager:
     
     def open_console(self, skip_check=False, gui_callback=None):
         """Open switch console in embedded webview."""
-        # Check if webview process is still running
+        # Allow multiple windows - check if THIS switch's webview is still running
         if self.webview_process is not None:
             # Check if process is still alive (poll() returns None if running)
             if self.webview_process.poll() is None:
-                # Window already exists and is running
+                # Window for this switch already exists and is running
+                # User can still open multiple switches, each switch gets its own window
+                # Just return to avoid duplicate windows for the same switch
                 return
             else:
                 # Process has ended, reset state
@@ -119,10 +121,15 @@ class SwitchManager:
     
     def _create_window_subprocess(self):
         """Create webview window in a subprocess (required for pywebview)."""
-        if self.webview_running:
+        # Allow opening even if another webview is running (different switch)
+        # Only prevent if THIS switch's webview is already running
+        if self.webview_running and self.webview_process and self.webview_process.poll() is None:
             return
         
         try:
+            # Reset state for new window creation
+            self.webview_running = False
+            self.webview_process = None
             self.webview_running = True
             # Get the directory where this script is located (core folder)
             # Handle both normal execution and PyInstaller bundled execution
@@ -273,11 +280,9 @@ except Exception as e:
             print(error_msg, file=sys.stderr)
             self.webview_running = False
             self.webview_process = None
-            # Fallback to external browser
-            try:
-                webbrowser.open(self.switch_url)
-            except Exception as browser_error:
-                print(f"Error opening browser: {browser_error}", file=sys.stderr)
+            # Don't fall back to browser - let the user know there was an error
+            # They can use "Open in Browser" button if needed
+            raise RuntimeError(f"Failed to open embedded console: {e}")
     
     def open_in_browser(self):
         """Open switch console in external browser."""
