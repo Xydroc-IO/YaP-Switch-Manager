@@ -419,13 +419,6 @@ The build script creates an optimized AppImage for all Linux distributions:
 
 © YaP Labs
 
-## Contributing
-
-Contributions are welcome! Please feel free to submit issues or pull requests.
-
-## Support
-
-For issues, questions, or feature requests, please open an issue on the project repository.
 
 ---
 
