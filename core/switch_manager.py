@@ -15,6 +15,7 @@ import requests
 from urllib.parse import urlparse
 from requests.adapters import HTTPAdapter
 import subprocess
+from switch_storage import SwitchStorage
 
 # Try to import Retry - handle different urllib3 versions
 try:
@@ -41,8 +42,9 @@ except ImportError:
     HAS_PYSTRAY = False
 
 class SwitchManager:
-    def __init__(self, initial_url="http://192.168.2.1/"):
+    def __init__(self, initial_url="http://192.168.2.1/", switch_name=None):
         self.switch_url = initial_url
+        self.switch_name = switch_name or "Switch"
         self.window = None
         self.webview_process = None
         self.webview_running = False
@@ -184,7 +186,7 @@ class SwitchManager:
                     # Use launcher script with Python
                     try:
                         self.webview_process = subprocess.Popen(
-                            [python_exe, launcher_script, self.switch_url],
+                            [python_exe, launcher_script, self.switch_url, self.switch_name],
                             stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE,
                             cwd=os.path.dirname(launcher_script) if launcher_script else None
@@ -197,7 +199,7 @@ class SwitchManager:
                     try:
                         os.chmod(launcher_script, 0o755)
                         self.webview_process = subprocess.Popen(
-                            [launcher_script, self.switch_url],
+                            [launcher_script, self.switch_url, self.switch_name],
                             stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE,
                             cwd=os.path.dirname(launcher_script) if launcher_script else None
@@ -222,12 +224,13 @@ class SwitchManager:
                 
                 # Create temp script that imports webview and runs it
                 temp_script = tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False)
+                window_title = f'YaP Switch Manager - {self.switch_name}'
                 temp_script.write(f'''#!/usr/bin/env python3
 import sys
 import webview
 url = "{self.switch_url}"
 try:
-    window = webview.create_window('YaP Switch Manager', url, width=1200, height=800, min_size=(800, 600), resizable=True)
+    window = webview.create_window('{window_title}', url, width=1200, height=800, min_size=(800, 600), resizable=True)
     webview.start(debug=False)
 except Exception as e:
     print(f"Error: {{e}}", file=sys.stderr)
@@ -312,12 +315,17 @@ except Exception as e:
         if url and not url.startswith(('http://', 'https://')):
             url = 'http://' + url
         self.switch_url = url
+    
+    def set_name(self, name):
+        """Update the switch name."""
+        if name:
+            self.switch_name = name
 
 class SwitchManagerGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("YaP Switch Manager")
-        self.root.geometry("480x400")
+        self.root.geometry("560x680")
         self.root.resizable(False, False)
         
         # System tray support
@@ -329,11 +337,24 @@ class SwitchManagerGUI:
         style = ttk.Style()
         style.theme_use('clam')  # Modern theme
         
-        # Switch manager instance
-        self.manager = SwitchManager()
+        # Switch storage for saving/loading switches
+        self.storage = SwitchStorage()
+        
+        # Track multiple switch manager instances (one per switch)
+        self.managers = {}  # Maps switch name to SwitchManager instance
+        
+        # Current active switch (for UI)
+        self.current_switch_name = None
+        self.current_manager = None
+        
+        # Mapping from listbox index to switch name
+        self.listbox_index_to_name = {}
         
         # Setup UI first (faster)
         self.create_widgets()
+        
+        # Load saved switches
+        self.load_saved_switches()
         
         # Center the window on primary monitor (non-blocking, after widgets are created)
         def center_window():
@@ -487,22 +508,17 @@ class SwitchManagerGUI:
         
         # Title with icon - centered and modern (optimized spacing)
         title_frame = ttk.Frame(main_frame)
-        title_frame.pack(pady=(0, 14))
+        title_frame.pack(pady=(0, 12))
         
         # Try to load and display icon
-        icon_label = None
         if HAS_PIL:
             try:
-                # Try to find icon.png in multiple locations (prioritize icon.png)
-                # Handle both normal execution and PyInstaller bundled execution
                 if getattr(sys, 'frozen', False):
-                    # Running as bundled executable
                     if hasattr(sys, '_MEIPASS'):
                         base_paths = [sys._MEIPASS, os.path.dirname(sys.executable)]
                     else:
                         base_paths = [os.path.dirname(sys.executable)]
                 else:
-                    # Normal Python execution
                     base_paths = [
                         os.path.dirname(os.path.dirname(__file__)),
                         os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
@@ -524,19 +540,17 @@ class SwitchManagerGUI:
                 
                 if icon_path:
                     img = Image.open(icon_path)
-                    # Resize icon to a reasonable size (56x56 for better fit)
-                    img.thumbnail((56, 56), Image.Resampling.LANCZOS)
+                    img.thumbnail((44, 44), Image.Resampling.LANCZOS)
                     self.title_icon_img = ImageTk.PhotoImage(img)
                     icon_label = ttk.Label(title_frame, image=self.title_icon_img)
-                    icon_label.pack(pady=(0, 8))
+                    icon_label.pack(pady=(0, 6))
             except Exception:
-                # Icon loading failed, continue without icon
                 pass
         
         title_label = ttk.Label(
             title_frame,
             text="YaP Switch Manager",
-            font=("Segoe UI", 18, "bold")
+            font=("Segoe UI", 15, "bold")
         )
         title_label.pack()
         
@@ -546,65 +560,100 @@ class SwitchManagerGUI:
             font=("Segoe UI", 9),
             foreground="#666666"
         )
-        subtitle_label.pack(pady=(4, 0))
+        subtitle_label.pack(pady=(3, 0))
         
-        # Switch info frame - modern styling (optimized padding)
-        info_frame = ttk.LabelFrame(main_frame, text="Switch Configuration", padding="12")
-        info_frame.pack(fill=tk.X, pady=(0, 12))
-        info_frame.columnconfigure(1, weight=1)
+        # Saved switches frame
+        saved_frame = ttk.LabelFrame(main_frame, text="Saved Switches", padding="10")
+        saved_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
         
-        ttk.Label(info_frame, text="Switch URL:", font=("Segoe UI", 9, "bold")).grid(row=0, column=0, sticky=tk.W, pady=5)
+        # Listbox with scrollbar for saved switches
+        listbox_frame = ttk.Frame(saved_frame)
+        listbox_frame.pack(fill=tk.BOTH, expand=True)
         
-        # URL entry field with modern styling
-        url_frame = ttk.Frame(info_frame)
-        url_frame.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(8, 0), pady=5)
-        url_frame.columnconfigure(0, weight=1)
+        scrollbar = ttk.Scrollbar(listbox_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        self.url_var = tk.StringVar(value=self.manager.switch_url)
-        url_entry = ttk.Entry(url_frame, textvariable=self.url_var, font=("Consolas", 9), width=20)
-        url_entry.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5))
-        # Allow Enter key to update URL
-        url_entry.bind('<Return>', lambda e: self.update_url())
+        self.switches_listbox = tk.Listbox(
+            listbox_frame,
+            font=("Segoe UI", 9),
+            yscrollcommand=scrollbar.set,
+            height=6
+        )
+        self.switches_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.switches_listbox.bind('<<ListboxSelect>>', self.on_switch_select)
+        scrollbar.config(command=self.switches_listbox.yview)
         
-        # Save URL button - modern styling
-        save_url_btn = ttk.Button(url_frame, text="Update", command=self.update_url, width=9)
-        save_url_btn.grid(row=0, column=1, sticky=tk.W)
+        # Buttons for saved switches
+        saved_buttons_frame = ttk.Frame(saved_frame)
+        saved_buttons_frame.pack(fill=tk.X, pady=(10, 0))
+        saved_buttons_frame.columnconfigure(0, weight=1)
+        saved_buttons_frame.columnconfigure(1, weight=1)
         
-        # URL status label
-        self.url_status_label = ttk.Label(info_frame, text="", font=("Segoe UI", 8))
-        self.url_status_label.grid(row=1, column=0, columnspan=2, sticky=tk.W, pady=(3, 0))
+        load_btn = ttk.Button(saved_buttons_frame, text="Load", command=self.load_selected_switch)
+        load_btn.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 4), pady=2)
         
-        # Buttons frame - modern grid layout (optimized spacing)
+        delete_btn = ttk.Button(saved_buttons_frame, text="Delete", command=self.delete_selected_switch)
+        delete_btn.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(4, 0), pady=2)
+        
+        # Switch configuration frame
+        config_frame = ttk.LabelFrame(main_frame, text="Add/Edit Switch", padding="12")
+        config_frame.pack(fill=tk.X, pady=(0, 10))
+        config_frame.columnconfigure(1, weight=1)
+        
+        # Switch name
+        ttk.Label(config_frame, text="Name:", font=("Segoe UI", 9, "bold")).grid(row=0, column=0, sticky=tk.W, pady=4)
+        self.name_var = tk.StringVar()
+        name_entry = ttk.Entry(config_frame, textvariable=self.name_var, font=("Segoe UI", 9))
+        name_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(8, 0), pady=4)
+        name_entry.bind('<Return>', lambda e: self.save_switch())
+        
+        # Switch URL
+        ttk.Label(config_frame, text="URL:", font=("Segoe UI", 9, "bold")).grid(row=1, column=0, sticky=tk.W, pady=4)
+        self.url_var = tk.StringVar(value="http://192.168.2.1/")
+        url_entry = ttk.Entry(config_frame, textvariable=self.url_var, font=("Consolas", 9))
+        url_entry.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=(8, 0), pady=4)
+        url_entry.bind('<Return>', lambda e: self.save_switch())
+        
+        # Status label
+        self.status_label = ttk.Label(config_frame, text="", font=("Segoe UI", 8))
+        self.status_label.grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=(4, 0))
+        
+        # Save button
+        save_btn_frame = ttk.Frame(config_frame)
+        save_btn_frame.grid(row=3, column=0, columnspan=2, pady=(10, 0))
+        save_btn = ttk.Button(save_btn_frame, text="Save Switch", command=self.save_switch)
+        save_btn.pack(pady=2)
+        
+        # Action buttons frame
         buttons_frame = ttk.Frame(main_frame)
         buttons_frame.pack(fill=tk.X, pady=(0, 10))
         buttons_frame.columnconfigure(0, weight=1)
         buttons_frame.columnconfigure(1, weight=1)
         
-        # Open in embedded window button - primary action
+        # Open in embedded window button
         open_embedded_btn = ttk.Button(
             buttons_frame,
             text="Open Console (Embedded)",
             command=self.open_embedded
         )
-        open_embedded_btn.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), padx=2, pady=4)
+        open_embedded_btn.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), padx=2, pady=5)
         
-        # Open in browser button
+        # Open in browser and test buttons
         open_browser_btn = ttk.Button(
             buttons_frame,
             text="Open in Browser",
             command=self.open_browser
         )
-        open_browser_btn.grid(row=1, column=0, sticky=(tk.W, tk.E), padx=(2, 4), pady=4)
+        open_browser_btn.grid(row=1, column=0, sticky=(tk.W, tk.E), padx=(2, 4), pady=5)
         
-        # Test connection button - secondary action
         test_btn = ttk.Button(
             buttons_frame,
             text="Test Connection",
             command=self.test_connection
         )
-        test_btn.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=(4, 2), pady=4)
+        test_btn.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=(4, 2), pady=5)
         
-        # Footer - modern styling (optimized padding)
+        # Footer
         footer_label = ttk.Label(
             main_frame,
             text="© YaP Labs",
@@ -613,18 +662,167 @@ class SwitchManagerGUI:
         )
         footer_label.pack(side=tk.BOTTOM, pady=(4, 0))
     
+    def load_saved_switches(self):
+        """Load saved switches into the listbox."""
+        switches = self.storage.load_switches()
+        self.switches_listbox.delete(0, tk.END)
+        self.listbox_index_to_name = {}
+        
+        for idx, switch_name in enumerate(sorted(switches.keys())):
+            switch_data = switches[switch_name]
+            display_text = f"{switch_name} - {switch_data.get('url', 'N/A')}"
+            self.switches_listbox.insert(tk.END, display_text)
+            self.listbox_index_to_name[idx] = switch_name
+    
+    def on_switch_select(self, event):
+        """Handle switch selection from listbox."""
+        selection = self.switches_listbox.curselection()
+        if selection:
+            index = selection[0]
+            switch_name = self.listbox_index_to_name.get(index)
+            if switch_name:
+                self.load_switch_data(switch_name)
+    
+    def load_switch_data(self, switch_name):
+        """Load switch data into the form fields."""
+        switch_data = self.storage.get_switch(switch_name)
+        if switch_data:
+            self.name_var.set(switch_data.get('name', ''))
+            self.url_var.set(switch_data.get('url', ''))
+            self.current_switch_name = switch_name
+            self._get_or_create_manager(switch_name, switch_data.get('url', ''))
+    
+    def load_selected_switch(self):
+        """Load the selected switch from the list."""
+        selection = self.switches_listbox.curselection()
+        if not selection:
+            messagebox.showwarning("No Selection", "Please select a switch from the list.")
+            return
+        
+        index = selection[0]
+        switch_name = self.listbox_index_to_name.get(index)
+        if switch_name:
+            self.load_switch_data(switch_name)
+            self.status_label.config(text=f"✓ Loaded switch: {switch_name}", foreground="#00AA00")
+            self.root.after(3000, lambda: self.status_label.config(text=""))
+    
+    def delete_selected_switch(self):
+        """Delete the selected switch."""
+        selection = self.switches_listbox.curselection()
+        if not selection:
+            messagebox.showwarning("No Selection", "Please select a switch to delete.")
+            return
+        
+        index = selection[0]
+        switch_name = self.listbox_index_to_name.get(index)
+        
+        if not switch_name:
+            return
+        
+        # Confirm deletion
+        result = messagebox.askyesno(
+            "Confirm Delete",
+            f"Are you sure you want to delete switch '{switch_name}'?",
+            icon='warning'
+        )
+        
+        if result:
+            if self.storage.delete_switch(switch_name):
+                # Remove from managers if active
+                if switch_name in self.managers:
+                    del self.managers[switch_name]
+                if self.current_switch_name == switch_name:
+                    self.current_switch_name = None
+                    self.current_manager = None
+                # Reload list
+                self.load_saved_switches()
+                self.status_label.config(text=f"✓ Deleted switch: {switch_name}", foreground="#00AA00")
+                self.root.after(3000, lambda: self.status_label.config(text=""))
+            else:
+                messagebox.showerror("Error", "Failed to delete switch.")
+    
+    def save_switch(self):
+        """Save or update a switch configuration."""
+        name = self.name_var.get().strip()
+        url = self.url_var.get().strip()
+        
+        if not name:
+            self.status_label.config(text="❌ Switch name cannot be empty", foreground="#CC0000")
+            return
+        
+        if not url:
+            self.status_label.config(text="❌ Switch URL cannot be empty", foreground="#CC0000")
+            return
+        
+        # Validate URL format
+        try:
+            if not url.startswith(('http://', 'https://')):
+                url = 'http://' + url
+            parsed = urlparse(url)
+            if not parsed.netloc:
+                raise ValueError("Invalid URL format")
+        except Exception as e:
+            self.status_label.config(text=f"❌ Invalid URL: {str(e)}", foreground="#CC0000")
+            return
+        
+        # Save to storage
+        if self.storage.save_switch(name, url):
+            # Update or create manager
+            self._get_or_create_manager(name, url)
+            # Reload list
+            self.load_saved_switches()
+            # Select the saved switch in listbox
+            self._select_switch_in_listbox(name)
+            self.status_label.config(text=f"✓ Saved switch: {name}", foreground="#00AA00")
+            self.root.after(3000, lambda: self.status_label.config(text=""))
+        else:
+            self.status_label.config(text="❌ Failed to save switch", foreground="#CC0000")
+    
+    def _get_or_create_manager(self, switch_name, switch_url):
+        """Get or create a SwitchManager instance for a switch."""
+        if switch_name not in self.managers:
+            self.managers[switch_name] = SwitchManager(switch_url, switch_name)
+        else:
+            # Update existing manager
+            manager = self.managers[switch_name]
+            manager.set_url(switch_url)
+            manager.set_name(switch_name)
+        
+        self.current_switch_name = switch_name
+        self.current_manager = self.managers[switch_name]
+        return self.current_manager
+    
+    def _select_switch_in_listbox(self, switch_name):
+        """Select a switch in the listbox by name."""
+        for idx, name in self.listbox_index_to_name.items():
+            if name == switch_name:
+                self.switches_listbox.selection_clear(0, tk.END)
+                self.switches_listbox.selection_set(idx)
+                self.switches_listbox.see(idx)
+                break
+    
     def open_embedded(self):
         """Open switch console in embedded window."""
-        self.root.after_idle(lambda: self._open_embedded_async())
+        # Get or create manager from current form data
+        name = self.name_var.get().strip() or "Switch"
+        url = self.url_var.get().strip() or "http://192.168.2.1/"
+        
+        # Normalize URL
+        if not url.startswith(('http://', 'https://')):
+            url = 'http://' + url
+        
+        manager = self._get_or_create_manager(name, url)
+        
+        self.root.after_idle(lambda: self._open_embedded_async(manager))
     
-    def _open_embedded_async(self):
+    def _open_embedded_async(self, manager):
         """Open console asynchronously."""
         def on_connection_check(connected):
             """Handle connection check result in GUI thread."""
             if not connected:
                 result = messagebox.askyesno(
                     "Connection Warning",
-                    f"Could not reach switch at {self.manager.switch_url}\n\n"
+                    f"Could not reach switch at {manager.switch_url}\n\n"
                     "This might be normal if:\n"
                     "- The switch is not on the same network\n"
                     "- The IP address has changed\n"
@@ -634,12 +832,10 @@ class SwitchManagerGUI:
                 )
                 if not result:
                     return
-            
-            # Window is already opening (optimistic)
         
         try:
             # Open immediately (optimistic) - connection check happens in background
-            self.manager.open_console(skip_check=False, gui_callback=on_connection_check)
+            manager.open_console(skip_check=False, gui_callback=on_connection_check)
         except Exception as e:
             import traceback
             error_details = f"{str(e)}\n\n{traceback.format_exc()}"
@@ -651,62 +847,37 @@ class SwitchManagerGUI:
     
     def open_browser(self):
         """Open switch console in external browser."""
+        # Get or create manager from current form data
+        name = self.name_var.get().strip() or "Switch"
+        url = self.url_var.get().strip() or "http://192.168.2.1/"
+        
+        # Normalize URL
+        if not url.startswith(('http://', 'https://')):
+            url = 'http://' + url
+        
+        manager = self._get_or_create_manager(name, url)
+        
         # Open browser (non-blocking)
-        self.root.after_idle(lambda: self._open_browser_async())
+        self.root.after_idle(lambda: self._open_browser_async(manager))
     
-    def _open_browser_async(self):
+    def _open_browser_async(self, manager):
         """Open browser asynchronously."""
         try:
-            self.manager.open_in_browser()
+            manager.open_in_browser()
         except Exception as e:
             self.root.after(0, lambda: self._show_error(str(e)))
     
-    def update_url(self):
-        """Update the switch URL from the entry field."""
-        new_url = self.url_var.get().strip()
-        
-        if not new_url:
-            self.url_status_label.config(text="❌ URL cannot be empty", foreground="#CC0000")
-            return
-        
-        # Validate URL format
-        try:
-            from urllib.parse import urlparse
-            # Add protocol if missing
-            if not new_url.startswith(('http://', 'https://')):
-                new_url = 'http://' + new_url
-            
-            # Validate URL
-            parsed = urlparse(new_url)
-            if not parsed.netloc:
-                raise ValueError("Invalid URL format")
-            
-            # Update manager URL
-            self.manager.set_url(new_url)
-            
-            # Update entry field to show normalized URL
-            self.url_var.set(self.manager.switch_url)
-            
-            # Show success message
-            self.url_status_label.config(text=f"✅ URL updated to {self.manager.switch_url}", foreground="#00AA00")
-            
-            # Clear message after 3 seconds
-            self.root.after(3000, lambda: self.url_status_label.config(text=""))
-            
-        except Exception as e:
-            self.url_status_label.config(text=f"❌ Invalid URL: {str(e)}", foreground="#CC0000")
-    
     def test_connection(self):
         """Test connection to switch - shows popup dialog."""
-        # Update manager URL from entry field first
-        current_url = self.url_var.get().strip()
-        if current_url:
-            try:
-                if not current_url.startswith(('http://', 'https://')):
-                    current_url = 'http://' + current_url
-                self.manager.set_url(current_url)
-            except:
-                pass
+        # Get or create manager from current form data
+        name = self.name_var.get().strip() or "Switch"
+        url = self.url_var.get().strip() or "http://192.168.2.1/"
+        
+        # Normalize URL
+        if not url.startswith(('http://', 'https://')):
+            url = 'http://' + url
+        
+        manager = self._get_or_create_manager(name, url)
         
         # Create status window
         status_window = tk.Toplevel(self.root)
@@ -797,12 +968,12 @@ class SwitchManagerGUI:
             """Update UI with test result."""
             if connected:
                 status_label.config(
-                    text=f"✓ Successfully connected to\n{self.manager.switch_url}",
+                    text=f"✓ Successfully connected to\n{manager.switch_url}",
                     foreground="#00AA00"
                 )
             else:
                 status_label.config(
-                    text=f"✗ Failed to connect to {self.manager.switch_url}\n\n"
+                    text=f"✗ Failed to connect to {manager.switch_url}\n\n"
                          "Possible reasons:\n"
                          "• Switch is not on the same network\n"
                          "• IP address has changed\n"
@@ -812,7 +983,7 @@ class SwitchManagerGUI:
             close_button.config(state="normal")
         
         # Start async connection test
-        self.manager.test_connection(on_test_result)
+        manager.test_connection(on_test_result)
     
     def setup_system_tray(self):
         """Setup system tray icon and menu."""
